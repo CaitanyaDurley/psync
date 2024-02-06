@@ -1,10 +1,11 @@
+mod thread_pool;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::io;
 use std::sync::mpsc;
-use std::thread;
 pub use clap::Parser;
+use thread_pool::ThreadPool;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -23,38 +24,29 @@ struct CopyJob {
 }
 
 pub fn run(args: Cli) -> Result<(), Box<dyn Error>> {
-    let to_copy = begin_traversal(args.src.clone());
-    // let (done_tx, done_rx) = mpsc::channel();
-    let mut traversing = true;
-    let mut copying = true;
-    let mut id = 0;
-    while traversing || copying {
-        match to_copy.try_recv() {
+    let pool = ThreadPool::new(args.threads.into());
+    let to_copy = begin_traversal(&pool, args.src.clone());
+    loop {
+        match to_copy.recv() {
             Ok(path) => {
                 let dest = args.dest.join(path.strip_prefix(&args.src)?);
-                let job = CopyJob {
-                    id,
-                    src: path,
-                    dest,
-                    size: None,
-                };
-                copy(job);
-                id += 1;
+                pool.run(move || copy(&path, &dest));
             },
-            Err(mpsc::TryRecvError::Disconnected) => {traversing = false},
-            Err(mpsc::TryRecvError::Empty) => (),
+            Err(_) => break,
         }
     }
     Ok(())
+    // pool goes out of scope, and its Drop implementation joins all worker threads
 }
 
-fn copy(job: CopyJob) {
+fn copy(src: &Path, dest: &Path) {
     todo!()
 }
 
-fn begin_traversal(src: PathBuf) -> mpsc::Receiver<PathBuf> {
+fn begin_traversal(pool: &ThreadPool, src: PathBuf) -> mpsc::Receiver<PathBuf> {
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || traverse(&src, &tx));
+    // TODO - handle the result from traverse instead of unwrap
+    pool.run(move || traverse(&src, &tx).unwrap());
     rx
 }
 

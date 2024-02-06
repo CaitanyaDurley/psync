@@ -31,7 +31,7 @@ impl Worker {
 }
 
 impl ThreadPool {
-    fn new(num_threads: usize) -> Self {
+    pub fn new(num_threads: usize) -> Self {
         assert!(num_threads > 0);
         let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));
@@ -46,7 +46,7 @@ impl ThreadPool {
         }
     }
 
-    fn run<F: FnOnce() + Send + 'static>(self, f: F) {
+    pub fn run<F: FnOnce() + Send + 'static>(&self, f: F) {
         let job = Box::new(f);
         // self.queue.send(job).unwrap();
         self.queue.as_ref().unwrap().send(job).unwrap();
