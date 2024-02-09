@@ -1,10 +1,10 @@
 mod thread_pool;
+pub use clap::Parser;
 use std::error::Error;
-use std::path::{Path, PathBuf};
 use std::fs;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-pub use clap::Parser;
 use thread_pool::ThreadPool;
 
 #[derive(Parser)]
@@ -17,7 +17,6 @@ pub struct Cli {
 }
 
 struct CopyJob {
-    id: usize,
     src: PathBuf,
     dest: PathBuf,
     size: Option<usize>,
@@ -25,13 +24,12 @@ struct CopyJob {
 
 pub fn run(args: Cli) -> Result<(), Box<dyn Error>> {
     let pool = ThreadPool::new(args.threads.into());
-    let to_copy = begin_traversal(&pool, args.src.clone());
+    let to_copy = begin_traversal(&pool, args.src, args.dest);
     loop {
         match to_copy.recv() {
-            Ok(path) => {
-                let dest = args.dest.join(path.strip_prefix(&args.src)?);
-                pool.run(move || copy(&path, &dest));
-            },
+            Ok(job) => {
+                pool.run(move || copy(job));
+            }
             Err(_) => break,
         }
     }
@@ -39,24 +37,40 @@ pub fn run(args: Cli) -> Result<(), Box<dyn Error>> {
     // pool goes out of scope, and its Drop implementation joins all worker threads
 }
 
-fn copy(src: &Path, dest: &Path) {
-    todo!()
+fn copy(job: CopyJob) {
+    // TODO: handle errors better than unwrap
+    // TODO - capture the returned total number of bytes copied
+    fs::copy(&job.src, &job.dest).unwrap();
 }
 
-fn begin_traversal(pool: &ThreadPool, src: PathBuf) -> mpsc::Receiver<PathBuf> {
+fn begin_traversal(pool: &ThreadPool, src: PathBuf, dest: PathBuf) -> mpsc::Receiver<CopyJob> {
     let (tx, rx) = mpsc::channel();
     // TODO - handle the result from traverse instead of unwrap
-    pool.run(move || traverse(&src, &tx).unwrap());
+    pool.run(move || traverse(&src, &dest, &tx).unwrap());
     rx
 }
 
-fn traverse(dir: &Path, sender: &mpsc::Sender<PathBuf>) -> io::Result<()> {
-    for entry in fs::read_dir(dir)? {
+/// Traverse a directory tree, sending file copy jobs down the sender
+/// and creating parent directories under dest as you go
+///
+/// # Parameters
+/// src - an existing directory in which to begin traversal
+/// dest - an existing directory in which to create any dir trees found within src
+/// sender - a channel for sending files which need copying
+fn traverse(src: &Path, dest: &Path, sender: &mpsc::Sender<CopyJob>) -> io::Result<()> {
+    for entry in fs::read_dir(src)? {
         let entry = entry?.path();
+        let dest = dest.join(entry.file_name().unwrap());
         if entry.is_dir() {
-            traverse(&entry, &sender)?;
+            fs::create_dir(&dest)?;
+            traverse(&entry, &dest, &sender)?;
         } else {
-            if let Err(_) = sender.send(entry) {
+            let job = CopyJob {
+                src: entry.to_path_buf(),
+                dest,
+                size: None,
+            };
+            if let Err(_) = sender.send(job) {
                 // the receiver on the main thread has disconnected
                 panic!();
             }

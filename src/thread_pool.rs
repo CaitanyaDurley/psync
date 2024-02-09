@@ -8,6 +8,7 @@ pub struct ThreadPool {
 }
 
 struct Worker {
+    #[allow(dead_code)]
     id: usize,
     handle: Option<thread::JoinHandle<()>>,
 }
