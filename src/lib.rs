@@ -22,7 +22,8 @@ struct CopyJob {
     size: Option<usize>,
 }
 
-pub fn run(args: Cli) -> Result<(), Box<dyn Error>> {
+pub fn run(mut args: Cli) -> Result<(), Box<dyn Error>> {
+    validate_args(&mut args)?;
     let pool = ThreadPool::new(args.threads.into());
     let to_copy = begin_traversal(&pool, args.src, args.dest);
     loop {
@@ -35,6 +36,26 @@ pub fn run(args: Cli) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
     // pool goes out of scope, and its Drop implementation joins all worker threads
+}
+
+fn validate_args(args: &mut Cli) -> Result<(), &str> {
+    if args.threads == 0 {
+        return Err("At least one thread needed");
+    }
+    if !Path::exists(&args.src) {
+        return Err("Source directory not accessible");
+    }
+    let dest_name = match args.src.file_name() {
+        Some(s) => s,
+        None => return Err("Invalid source directory"),
+    };
+    if Path::exists(&args.dest) {
+        args.dest = args.dest.join(dest_name);
+    }
+    if let Err(_) = fs::create_dir(&args.dest) {
+        return Err("Error creating destination directory");
+    }
+    Ok(())
 }
 
 fn copy(job: CopyJob) {
