@@ -17,15 +17,28 @@ pub struct Cli {
     threads: u8,
 }
 
+enum Message {
+    ToCopy(CopyJob),
+    Copied(u64),
+    Err(io::Error),
+}
+
 pub fn run(mut args: Cli) -> Result<(), Box<dyn Error>> {
     validate_args(&mut args)?;
     let pool = ThreadPool::new(args.threads.into());
-    let to_copy = begin_traversal(&pool, args.src, args.dest);
+    let (tx, rx) = mpsc::channel();
+    let traversal_sender = tx.clone();
+    pool.run(move || begin_traversal(&args.src, &args.dest, traversal_sender));
     loop {
-        match to_copy.recv() {
-            Ok(job) => {
-                pool.run(move || copy(job));
-            }
+        match rx.recv() {
+            Ok(m) => match m {
+                Message::ToCopy(job) => {
+                    let copy_sender = tx.clone();
+                    pool.run(move || copy(job, copy_sender))
+                },
+                Message::Copied(b) => println!("Copied {b} bytes"),
+                Message::Err(e) => return Err(Box::new(e)),
+            },
             Err(_) => break,
         }
     }
@@ -53,17 +66,20 @@ fn validate_args(args: &mut Cli) -> Result<(), &str> {
     Ok(())
 }
 
-fn copy(job: CopyJob) {
-    // TODO: handle errors better than unwrap
-    // TODO - capture the returned total number of bytes copied
-    fs::copy(&job.src, &job.dest).unwrap();
+fn copy(job: CopyJob, sender: mpsc::Sender<Message>) {
+    sender.send(match fs::copy(&job.src, &job.dest) {
+        Ok(b) => Message::Copied(b),
+        Err(e) => Message::Err(e),
+    }).unwrap();
 }
 
-fn begin_traversal(pool: &ThreadPool, src: PathBuf, dest: PathBuf) -> mpsc::Receiver<CopyJob> {
-    let (tx, rx) = mpsc::channel();
-    // TODO - handle the result from traverse instead of unwrap
-    pool.run(move || traverse(&src, &dest, &tx).unwrap());
-    rx
+fn begin_traversal(src: &Path, dest: &Path, sender: mpsc::Sender<Message>) {
+    for job in directory_traversal::traverse(src, dest) {
+        sender.send(match job {
+            Ok(job) => Message::ToCopy(job),
+            Err(e) => Message::Err(e),
+        }).unwrap();
+    }
 }
 
 mod directory_traversal {
