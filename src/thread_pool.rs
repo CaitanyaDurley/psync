@@ -49,7 +49,6 @@ impl ThreadPool {
 
     pub fn run<F: FnOnce() + Send + 'static>(&self, f: F) {
         let job = Box::new(f);
-        // self.queue.send(job).unwrap();
         self.queue.as_ref().unwrap().send(job).unwrap();
     }
 }
