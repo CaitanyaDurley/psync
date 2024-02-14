@@ -3,6 +3,8 @@ pub use clap::Parser;
 use std::error::Error;
 use std::fs;
 use std::io;
+use std::io::{stdout, Write};
+use std::time;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -29,9 +31,12 @@ pub fn run(mut args: Cli) -> Result<(), Box<dyn Error>> {
     let pool = ThreadPool::new(args.threads.into());
     let (tx, rx) = mpsc::channel();
     let sender = Arc::new(tx);
+    let mut stdout = stdout().lock();
+    let mut total_copied: u64 = 0;
+    let mut idle;
+    let start = time::Instant::now();
     let traversal_sender = Arc::clone(&sender);
     pool.run(move || begin_traversal(&args.src, &args.dest, traversal_sender));
-    let mut idle;
     loop {
         // idle is true iff traversal is done and there are no currently running copy jobs
         idle = Arc::strong_count(&sender) == 1;
@@ -41,7 +46,13 @@ pub fn run(mut args: Cli) -> Result<(), Box<dyn Error>> {
                     let copy_sender = Arc::clone(&sender);
                     pool.run(move || copy(job, copy_sender))
                 },
-                Message::Copied(b) => println!("Copied {b} bytes"),
+                Message::Copied(b) => {
+                    total_copied += b;
+                    let mb_copied = (total_copied as f64) / 1024f64.powi(2);
+                    let elapsed = start.elapsed().as_secs_f64();
+                    let speed = mb_copied / elapsed;
+                    write!(stdout, "\rCopied {:.1}MB in {:.1}s = {:.1}MB/s", mb_copied, elapsed, speed)?;
+                },
                 Message::Err(e) => return Err(Box::new(e)),
             },
             Err(_) => if idle {
@@ -50,6 +61,7 @@ pub fn run(mut args: Cli) -> Result<(), Box<dyn Error>> {
             },
         }
     }
+    write!(stdout, "\n")?;
     Ok(())
     // pool goes out of scope, and its Drop implementation joins all worker threads
 }
