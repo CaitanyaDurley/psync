@@ -1,2 +1,4 @@
 target
 dev
+vendor
+.cargo

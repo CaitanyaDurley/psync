@@ -1,0 +1,27 @@
+name: Vendor
+
+on:
+    workflow_dispatch:
+        inputs:
+            branch:
+                description: 'Branch name'
+                required: true
+                default: 'master'
+
+jobs:
+    vendor:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                ref: ${{ inputs.branch }}
+            - uses: actions-rs/toolchain@v1
+              with:
+                toolchain: stable
+            - run: mkdir .cargo && cargo vendor > .cargo/config.toml
+            - uses: actions/upload-artifact@v4
+              id: artifact-upload-step
+              with:
+                name: '${{ inputs.branch }}-$GITHUB_SHA'
+                path: $GITHUB_WORKSPACE
+            - run: echo 'Artifact ID is ${{ steps.artifact-upload-step.outputs.artifact-id }}'
