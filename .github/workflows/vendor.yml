@@ -23,5 +23,6 @@ jobs:
               id: artifact-upload-step
               with:
                 name: '${{ inputs.branch }}-$GITHUB_SHA'
-                path: $GITHUB_WORKSPACE
+                path: .
+                if-no-files-found: error
             - run: echo 'Artifact ID is ${{ steps.artifact-upload-step.outputs.artifact-id }}'
