@@ -1,8 +1,14 @@
 [![License: GPLv3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![GoDocs](https://godocs.io/github.com/hweidner/psync?status.svg)](https://godocs.io/github.com/hweidner/psync)
-[![Go Reference](https://pkg.go.dev/badge/github.com/hweidner/psync.svg)](https://pkg.go.dev/github.com/hweidner/psync)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hweidner/psync)](https://goreportcard.com/report/github.com/hweidner/psync)
-[![Total alerts](https://img.shields.io/lgtm/alerts/g/hweidner/psync.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/hweidner/psync/alerts/)
+
+This is a fork of  _hweidner_'s psync project. My changes are as follows:
+1. Individual files are assigned to worker threads rather than whole directories - this has two benefits:
+	* Prevents one thread being assigned a directory full of large files, while the others idle
+	* Performs better with shallow directory trees
+1. Traversal of the entire source directory tree is assigned to a dedicated thread (once traversal is finished the thread is repurposed) rather than each worker traversing its subdirectory - this ensures:
+	* Worker threads are consistently maximising throughput to OSTs
+	* MDTs (of which there are likely not many) do not have to deal with contention
+1. The default number of threads is 1 (rather than 16) - for sanity when testing on non-distributed filesystems
+1. Use Rust instead of Go - because I wanted to
 
 Parallel Sync - parallel recursive copying of directories
 =========================================================
@@ -11,33 +17,37 @@ psync is a tool which copies a directory recursively to another directory.
 Unlike "cp -r", which walks through the files and subdirectories in sequential
 order, psync copies several files concurrently by using threads.
 
-psync was written to speed up copying of large trees to or from a network
-file system like GlusterFS, Ceph, WebDAV or NFS. Operations on such file
-systems are usually latency bound, especially with small files.
-Parallel execution can help to utilize the bandwidth better and avoid that
-the latencies sum up, as this is the case in sequential operations.
+A recursive copy of a directory can be a throughput bound or latency bound
+operation, depending on the size of files and characteristics of the source
+and/or destination file system. When copying between standard file systems on
+two local hard disks, the operation is typically throughput bound, and copying
+in parallel has no performance advantage over copying sequentially. In this
+case, you have a bunch of options, including "cp -r" or "rsync".
 
-Currently, psync does only copy directory trees, similar to "cp -r". A "sync"
-mode, similar to "rsync -rl" is planned. See [GOALS.md](GOALS.md) on how psync
-finally may look like. A first version of the sync mode can be found in the
-branch `syncmode`.
+However, when copying from or to network file systems (NFS, CIFS), WAN storage
+(WebDAV, external cloud services), distributed file systems (GlusterFS, CephFS)
+or file systems that live on a DRBD device, the latency for each file access is
+often limiting performance factor. With sequential copies, the latencies sum up
+and can consume lots of time, although the bandwidth is not saturated. In this
+case, it can make up a significant performance boost if the files are copied in
+parallel.
+
+In the case of distributed filesystems, multiple copying threads also increases
+the likelihood of keeping multiple Object Storage Targets busy. Of course, this
+will only come into play if your network has sufficient bandwidth.
+
 
 Installation
 ------------
 
-You need a Go compiler to install psync from source. Follow the instructions on
-the [Go Installation page](https://golang.org/doc/install), or install from your
-operating system distribution (e.g. ``apt install golang`` on Debian/Ubuntu Linux).
-
-Then install psync with
-
-	go get github.com/hweidner/psync
-
-This command will fetch psync, compile and install it in the directory
-$HOME/go/bin, or $GOPATH/bin if GOPATH is set.
-
-When working with Go 1.16 or later, you might need to explicitely turn modules
-off by setting the environment variable GO111MODULE=off.
+No pre-built executables are provided. You must build from source.
+The master branch is where latest changes may be found. Clone a release branch (or download the source code from a tagged release) for production-ready code.
+To compile, run:
+```
+cargo build --release
+```
+you will find the executable at _target/release/psync_.
+Note an internet connection is required to download dependencies. If you need to build on an offline system, download the vendor.zip file from a tagged release and run the same command as before (dependencies are pre-downloaded into the _vendor_ directory).
 
 Usage
 -----
@@ -55,31 +65,15 @@ psync is invoked as follows:
 	source          - source directory
 	destination     - destination directory
 
-Example
--------
-
-Copy all files and subdirectories from /data/src into /data/dest.
-
-	psync -threads 8 /data/src /data/dest
-
-`/data/src` and `/data/dest` must exist and must be directories.
-
-Why should I use it
--------------------
-
-A recursive copy of a directory can be a throughput bound or latency bound
-operation, depending on the size of files and characteristics of the source
-and/or destination file system. When copying between standard file systems on
-two local hard disks, the operation is typically throughput bound, and copying
-in parallel has no performance advantage over copying sequentially. In this
-case, you have a bunch of options, including "cp -r" or "rsync".
-
-However, when copying from or to network file systems (NFS, CIFS), WAN storage
-(WebDAV, external cloud services), distributed file systems (GlusterFS, CephFS)
-or file systems that live on a DRBD device, the latency for each file access is
-often limiting performance factor. With sequential copies, the operation can
-consume lots of time, although the bandwidth is not saturated. In this case, it
-can make up a significant performance boost if the files are copied in parallel.
+The behaviour of source & destination are as with `cp -R`. Namely:
+1. The source directory must exist and not be a path ending in _._ or _.._
+1. If the destination directory does not exist then:
+	* The destination's parent directory must exist
+	* The destination directory will be created
+	* The contents of _source_ will be copied into _destination_
+1. If the destination directory does exist then:
+	* The source directory itself will be copied into _destination_
+	* That is, a directory of the same basename as _source_ will be created within _destination_
 
 Where psync should not be used
 ------------------------------
@@ -97,18 +91,6 @@ Never use psync when writing to a FAT/VFAT/exFAT file system! Those file systems
 are best written sequentially. Parallel write access will be slower, and leads
 to inefficient data structures and fragmentation. Reading from those file systems
 with psync should be efficient.
-
-How it works
-------------
-
-psync uses goroutines for copying files in parallel. By default, 16 copy workers
-are spawned as goroutines, but the number can be adjusted with the -threads switch.
-
-Each worker waits for a directory to be submitted. It then handles all the
-directory entries sequentially. Files are copied one by one to the destination
-directory. When subdirectories are discovered, they are created on the destination
-side. Traversal of the subdirecory is then submitted to other workers and thus done
-in parallel to the current workload.
 
 Performance values
 ------------------
