@@ -8,8 +8,7 @@ use std::io;
 use std::io::{stdout, Write};
 use std::time;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Weak};
 use thread_pool::ThreadPool;
 use directory_traversal::CopyJob;
 
@@ -23,31 +22,22 @@ pub struct Cli {
 }
 
 enum Message {
-    ToCopy(CopyJob),
     Copied(u64),
     Err(io::Error),
 }
 
 pub fn run(mut args: Cli) -> Result<(), Box<dyn Error>> {
     validate_args(&mut args)?;
-    let pool = ThreadPool::new(args.threads.into());
+    let pool = Arc::new(ThreadPool::new(args.threads.into()));
     let (tx, rx) = mpsc::channel();
-    let sender = Arc::new(tx);
     let mut stdout = stdout().lock();
     let mut total_copied: u64 = 0;
-    let mut idle;
     let start = time::Instant::now();
-    let traversal_sender = Arc::clone(&sender);
-    pool.run(move || begin_traversal(&args.src, &args.dest, traversal_sender));
+    let traversal_pool = Arc::downgrade(&pool);
+    pool.run(move || begin_traversal(&args.src, &args.dest, traversal_pool, tx));
     loop {
-        // idle is true iff traversal is done and there are no currently running copy jobs
-        idle = Arc::strong_count(&sender) == 1;
-        match rx.try_recv() {
+        match rx.recv() {
             Ok(m) => match m {
-                Message::ToCopy(job) => {
-                    let copy_sender = Arc::clone(&sender);
-                    pool.run(move || copy(job, copy_sender))
-                },
                 Message::Copied(b) => {
                     total_copied += b;
                     let mb_copied = (total_copied as f64) / 1024f64.powi(2);
@@ -57,10 +47,7 @@ pub fn run(mut args: Cli) -> Result<(), Box<dyn Error>> {
                 },
                 Message::Err(e) => return Err(Box::new(e)),
             },
-            Err(_) => if idle {
-                // there's no messages on the channel and no more are coming
-                break
-            },
+            Err(_) => break,
         }
     }
     write!(stdout, "\n")?;
@@ -88,18 +75,25 @@ fn validate_args(args: &mut Cli) -> Result<(), &str> {
     Ok(())
 }
 
-fn copy(job: CopyJob, sender: Arc<mpsc::Sender<Message>>) {
+fn copy(job: CopyJob, sender: mpsc::Sender<Message>) {
     sender.send(match fs::copy(&job.src, &job.dest) {
         Ok(b) => Message::Copied(b),
         Err(e) => Message::Err(e),
     }).unwrap();
 }
 
-fn begin_traversal(src: &Path, dest: &Path, sender: Arc<mpsc::Sender<Message>>) {
+fn begin_traversal(src: &Path, dest: &Path, pool: Weak<ThreadPool>, sender: mpsc::Sender<Message>) {
     for job in directory_traversal::traverse(src, dest) {
-        sender.send(match job {
-            Ok(job) => Message::ToCopy(job),
-            Err(e) => Message::Err(e),
-        }).unwrap();
+        match job {
+            Ok(job) => {
+                let sender = sender.clone();
+                let pool = pool.upgrade().unwrap();
+                pool.run(move || copy(job, sender))
+            },
+            Err(e) => {
+                sender.send(Message::Err(e)).unwrap();
+                break
+            },
+        }
     }
 }
