@@ -17,8 +17,10 @@ use directory_traversal::CopyJob;
 pub struct Cli {
     src: PathBuf,
     dest: PathBuf,
-    #[arg(short, long, default_value_t = 1)]
+    #[arg(short, long, default_value_t = 1, help = "How many worker threads to spawn")]
     threads: u8,
+    #[arg(short, long, help = "Display speed stats during the copy")]
+    stats: bool,
 }
 
 enum Message {
@@ -29,21 +31,22 @@ enum Message {
 pub fn run(mut args: Cli) -> Result<(), Box<dyn Error>> {
     validate_args(&mut args)?;
     let pool = Arc::new(ThreadPool::new(args.threads.into()));
+    let traversal_pool = Arc::downgrade(&pool);
     let (tx, rx) = mpsc::channel();
     let mut stdout = stdout().lock();
-    let mut total_copied: u64 = 0;
+    let mut mb_copied = 0f64;
     let start = time::Instant::now();
-    let traversal_pool = Arc::downgrade(&pool);
     pool.run(move || begin_traversal(&args.src, &args.dest, traversal_pool, tx));
     loop {
         match rx.recv() {
             Ok(m) => match m {
                 Message::Copied(b) => {
-                    total_copied += b;
-                    let mb_copied = (total_copied as f64) / 1024f64.powi(2);
-                    let elapsed = start.elapsed().as_secs_f64();
-                    let speed = mb_copied / elapsed;
-                    write!(stdout, "\rCopied {:.1}MB in {:.1}s = {:.1}MB/s", mb_copied, elapsed, speed)?;
+                    if args.stats {
+                        mb_copied += (b as f64) / 1024f64.powi(2);
+                        let elapsed = start.elapsed().as_secs_f64();
+                        let speed = mb_copied / elapsed;
+                        write!(stdout, "\rCopied {:.1}MB in {:.1}s = {:.1}MB/s", mb_copied, elapsed, speed)?;
+                    }
                 },
                 Message::Err(e) => return Err(Box::new(e)),
             },
