@@ -86,7 +86,14 @@ fn copy(job: CopyJob, sender: mpsc::Sender<Message>) {
 }
 
 fn begin_traversal(src: &Path, dest: &Path, pool: Weak<ThreadPool>, sender: mpsc::Sender<Message>) {
-    for job in directory_traversal::traverse(src, dest) {
+    let traversal_iterator = match directory_traversal::traverse(src, dest) {
+        Ok(x) => x,
+        Err(e) => {
+            sender.send(Message::Err(e)).unwrap();
+            return
+        },
+    };
+    for job in traversal_iterator {
         match job {
             Ok(job) => {
                 let sender = sender.clone();

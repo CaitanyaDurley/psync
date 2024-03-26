@@ -7,32 +7,37 @@ pub struct CopyJob {
     pub dest: PathBuf,
 }
 
-/// Returns an iterator over the subtree of src, yielding CopyJob(s)
-/// and creating parent directories under dest as it goes. Returns an
-/// io::Error if a directory cannot be read/created (e.g. permissions)
-/// or if an intermittent IO fault is encountered.
+/// Returns a `CopyJobIterator` over the subtree of src.
 ///
 /// # Parameters
 /// src - an existing directory in which to begin traversal
 /// dest - an existing directory in which to create any dir trees found within src
-pub fn traverse(src: &Path, dest: &Path) -> CopyJobIterator {
+/// 
+/// # Errors
+/// If src does not exist/is not a directory/cannot be opened
+pub fn traverse(src: &Path, dest: &Path) -> io::Result<CopyJobIterator> {
     let state = State {
-        src: src.to_path_buf(),
+        src_entries: fs::read_dir(src)?,
         dest: dest.to_path_buf(),
-        src_entries: None,
     };
-    CopyJobIterator {
+    Ok(CopyJobIterator {
         stack: vec![state],
         errored: false,
-    }
+    })
 }
 
 struct State {
-    src: PathBuf,
+    src_entries: fs::ReadDir,
     dest: PathBuf,
-    src_entries: Option<fs::ReadDir>,
 }
 
+// The iterator returned by `traverse`
+// Yields `CopyJob`(s) and creates directories under dest as src is traversed
+// It is guaranteed that the parent directory of a `CopyJob` returned by this iterator will exist
+//
+// # Errors
+// 1. If a subdirectory cannot be read/created (e.g. permissions)
+// 1. If an intermittent IO fault is encountered
 pub struct CopyJobIterator {
     stack: Vec<State>,
     errored: bool,
@@ -53,41 +58,46 @@ impl Iterator for CopyJobIterator {
             return None
         }
         let state = self.stack.pop().unwrap();
-        let mut src_entries = match state.src_entries {
-            Some(entries) => entries,
-            None => {
-                match fs::read_dir(&state.src) {
-                    Ok(entries) => entries,
-                    Err(e) => return self.wrap_error(e),
-                }
-            },
-        };
+        let mut src_entries = state.src_entries;
         while let Some(res) = src_entries.next() {
             let entry = match res {
-                Ok(entry) => entry.path(),
+                Ok(entry) => entry,
                 Err(e) => return self.wrap_error(e),
             };
-            let dest = state.dest.join(entry.file_name().unwrap());
-            if entry.is_dir() {
+            let dest = state.dest.join(entry.file_name());
+            let entry_type = match entry.file_type() {
+                Ok(x) => x,
+                Err(e) => return self.wrap_error(e),
+            };
+            if entry_type.is_dir() {
                 if let Err(e) = fs::create_dir(&dest) {
                     return self.wrap_error(e)
                 };
+                let next_entries = match fs::read_dir(entry.path()) {
+                    Ok(x) => x,
+                    Err(e) => return self.wrap_error(e),
+                };
                 self.stack.push(State {
-                    src: entry,
+                    src_entries: next_entries,
                     dest,
-                    src_entries: None
                 });
-            } else {
+            } else if entry_type.is_file() {
                 let job = CopyJob {
-                    src: entry,
+                    src: entry.path(),
                     dest,
                 };
                 self.stack.push(State {
-                    src: state.src,
+                    src_entries,
                     dest: state.dest,
-                    src_entries: Some(src_entries),
                 });
                 return Some(Ok(job))
+            } else if entry_type.is_symlink() {
+                // TODO: create symlinks in dest, check what cp does with symlinks pointing outside src
+                eprintln!("Skipping symlink: {}", entry.path().display());
+            } else {
+                // this branch shouldn't be reachable
+                eprintln!("Unrecognised entry: {}", entry.path().display());
+                return self.wrap_error(io::Error::from(io::ErrorKind::InvalidData))
             }
         };
         return self.next()
