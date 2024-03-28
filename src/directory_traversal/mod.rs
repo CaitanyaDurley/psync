@@ -5,6 +5,7 @@ use std::fs;
 pub struct CopyJob {
     pub src: PathBuf,
     pub dest: PathBuf,
+    pub symlink: bool,
 }
 
 /// Returns a `CopyJobIterator` over the subtree of src.
@@ -81,23 +82,18 @@ impl Iterator for CopyJobIterator {
                     src_entries: next_entries,
                     dest,
                 });
-            } else if entry_type.is_file() {
+            } else {
+                // entry is either a file or a symlink
                 let job = CopyJob {
                     src: entry.path(),
                     dest,
+                    symlink: entry_type.is_symlink(),
                 };
                 self.stack.push(State {
                     src_entries,
                     dest: state.dest,
                 });
                 return Some(Ok(job))
-            } else if entry_type.is_symlink() {
-                // TODO: create symlinks in dest, check what cp does with symlinks pointing outside src
-                eprintln!("Skipping symlink: {}", entry.path().display());
-            } else {
-                // this branch shouldn't be reachable
-                eprintln!("Unrecognised entry: {}", entry.path().display());
-                return self.wrap_error(io::Error::from(io::ErrorKind::InvalidData))
             }
         };
         return self.next()
