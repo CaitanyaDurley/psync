@@ -21,6 +21,8 @@ pub struct Cli {
     threads: u8,
     #[arg(short, long, help = "Display speed stats during the copy")]
     stats: bool,
+    #[arg(long, help = "Only copy files from src differing/missing in dest")]
+    sync: bool,
 }
 
 enum Message {
@@ -62,18 +64,25 @@ fn validate_args(args: &mut Cli) -> Result<(), &str> {
     if args.threads == 0 {
         return Err("At least one thread needed");
     }
-    if !Path::exists(&args.src) {
+    if !args.src.exists() {
         return Err("Source directory not accessible");
+    }
+    if !args.src.is_dir() {
+        return Err("Source directory not a valid directory")
     }
     let dest_name = match args.src.file_name() {
         Some(s) => s,
-        None => return Err("Invalid source directory"),
+        None => return Err("Can't copy from .. (yet)"),
     };
-    if Path::exists(&args.dest) {
+    if args.dest.exists() {
         args.dest = args.dest.join(dest_name);
     }
-    if let Err(_) = fs::create_dir(&args.dest) {
-        return Err("Error creating destination directory");
+    if !args.dest.exists() {
+        args.sync = false;
+        return fs::create_dir(&args.dest).or(Err("Couldn't create destination directory"))
+    }
+    if !args.sync {
+        return Err("Destination directory already exists. Consider --sync")
     }
     Ok(())
 }
