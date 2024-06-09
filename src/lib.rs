@@ -77,11 +77,7 @@ fn validate_args(args: &mut Cli) -> Result<(), &str> {
     if args.dest.exists() {
         args.dest = args.dest.join(dest_name);
     }
-    if !args.dest.exists() {
-        args.sync = false;
-        return fs::create_dir(&args.dest).or(Err("Couldn't create destination directory"))
-    }
-    if !args.sync {
+    if args.dest.exists() && !args.sync {
         return Err("Destination directory already exists. Consider --sync")
     }
     Ok(())

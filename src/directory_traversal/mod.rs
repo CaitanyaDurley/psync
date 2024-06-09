@@ -6,20 +6,28 @@ pub struct CopyJob {
     pub src: PathBuf,
     pub dest: PathBuf,
     pub symlink: bool,
+    // indicates whether the source file MAY exist at dest
+    pub may_exist: bool,
 }
 
 /// Returns a `CopyJobIterator` over the subtree of src.
 ///
 /// # Parameters
 /// src - an existing directory in which to begin traversal
-/// dest - an existing directory in which to create any dir trees found within src
+/// dest - a directory in which to create any dir trees found within src
 /// 
 /// # Errors
-/// If src does not exist/is not a directory/cannot be opened
+/// 1. If src does not exist/is not a directory/cannot be opened
+/// 1. If dest doesn't exist and couldn't be created
 pub fn traverse(src: &Path, dest: &Path) -> io::Result<CopyJobIterator> {
+    let fresh_parent = !dest.exists();
+    if fresh_parent {
+        fs::create_dir(dest)?
+    }
     let state = State {
         src_entries: fs::read_dir(src)?,
         dest: dest.to_path_buf(),
+        fresh_parent,
     };
     Ok(CopyJobIterator {
         stack: vec![state],
@@ -30,6 +38,8 @@ pub fn traverse(src: &Path, dest: &Path) -> io::Result<CopyJobIterator> {
 struct State {
     src_entries: fs::ReadDir,
     dest: PathBuf,
+    // indicates if dest's parent was created by us (or existed before)
+    fresh_parent: bool,
 }
 
 // The iterator returned by `traverse`
@@ -71,9 +81,12 @@ impl Iterator for CopyJobIterator {
                 Err(e) => return self.wrap_error(e),
             };
             if entry_type.is_dir() {
-                if let Err(e) = fs::create_dir(&dest) {
-                    return self.wrap_error(e)
-                };
+                let fresh_parent = state.fresh_parent || !dest.exists();
+                if fresh_parent {
+                    if let Err(e) = fs::create_dir(&dest) {
+                        return self.wrap_error(e)
+                    };
+                }
                 let next_entries = match fs::read_dir(entry.path()) {
                     Ok(x) => x,
                     Err(e) => return self.wrap_error(e),
@@ -81,6 +94,7 @@ impl Iterator for CopyJobIterator {
                 self.stack.push(State {
                     src_entries: next_entries,
                     dest,
+                    fresh_parent,
                 });
             } else {
                 // entry is either a file or a symlink
@@ -88,10 +102,12 @@ impl Iterator for CopyJobIterator {
                     src: entry.path(),
                     dest,
                     symlink: entry_type.is_symlink(),
+                    may_exist: !state.fresh_parent,
                 };
                 self.stack.push(State {
                     src_entries,
                     dest: state.dest,
+                    fresh_parent: state.fresh_parent,
                 });
                 return Some(Ok(job))
             }
