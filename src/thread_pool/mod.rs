@@ -58,7 +58,7 @@ impl Drop for ThreadPool {
         drop(self.queue.take());
         for worker in self.workers.iter_mut() {
             if let Some(h) = worker.handle.take() {
-                h.join().unwrap();
+                let _ = h.join();
             };
         }
     }
