@@ -1,16 +1,15 @@
 mod thread_pool;
-mod directory_traversal;
+mod sync;
 
 pub use clap::Parser;
 use std::error::Error;
-use std::fs;
 use std::io;
 use std::io::{stdout, Write};
 use std::time;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Weak};
 use thread_pool::ThreadPool;
-use directory_traversal::CopyJob;
+use sync::{directory_traversal, CopyJob};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -84,28 +83,11 @@ fn validate_args(args: &mut Cli) -> Result<(), &str> {
 }
 
 fn copy(job: CopyJob, sender: mpsc::Sender<Message>) {
-    let res = if job.symlink {
-        copy_symlink(&job.src, &job.dest).and(Ok(0))
-    } else {
-        fs::copy(&job.src, &job.dest)
-    };
+    let res = sync::copy(job);
     sender.send(match res {
         Ok(b) => Message::Copied(b),
         Err(e) => Message::Err(e),
     }).unwrap();
-}
-
-// Copy (i.e. recreate) src at dest.
-// The symlink's target will be completely unmodified, i.e.
-// 1. If the target is an absolute path, dest will point to that path
-// 1. If the target is a relative path, dest will also be relative (from dest's location). This can lead to broken symlinks.
-// 
-// # Errors
-// 1. If src is not a symlink
-// 1. If the new symlink could not be created
-fn copy_symlink(src: &Path, dest: &Path) -> io::Result<()> {
-    let target = fs::read_link(src)?;
-    std::os::unix::fs::symlink(target, dest)
 }
 
 fn begin_traversal(src: &Path, dest: &Path, pool: Weak<ThreadPool>, sender: mpsc::Sender<Message>) {
