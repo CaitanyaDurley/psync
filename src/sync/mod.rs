@@ -5,11 +5,19 @@ use std::{fs, io};
 use std::path::Path;
 
 
+pub fn sync(job: CopyJob) -> io::Result<u64> {
+    if job.may_exist {
+        todo!()
+    } else {
+        copy(job)
+    }
+}
+
 // Handles a dumb copy. It is assumed dest does not exist
 // # Errors
 // 1. If the copy failed
 // 1. If the file is a symlink and dest already exists
-pub fn copy(job: CopyJob) -> io::Result<u64> {
+fn copy(job: CopyJob) -> io::Result<u64> {
     if job.symlink {
         copy_symlink(&job.src, &job.dest).and(Ok(0))
     } else {
@@ -24,7 +32,7 @@ pub fn copy(job: CopyJob) -> io::Result<u64> {
 // 
 // # Errors
 // 1. If src is not a symlink
-// 1. If the new symlink could not be created
+// 1. If the new symlink could not be created (e.g. the dest already exists)
 fn copy_symlink(src: &Path, dest: &Path) -> io::Result<()> {
     let target = fs::read_link(src)?;
     std::os::unix::fs::symlink(target, dest)

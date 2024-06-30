@@ -83,7 +83,7 @@ fn validate_args(args: &mut Cli) -> Result<(), &str> {
 }
 
 fn copy(job: CopyJob, sender: mpsc::Sender<Message>) {
-    let res = sync::copy(job);
+    let res = sync::sync(job);
     sender.send(match res {
         Ok(b) => Message::Copied(b),
         Err(e) => Message::Err(e),
