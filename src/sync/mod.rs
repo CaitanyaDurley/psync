@@ -4,12 +4,33 @@ pub use directory_traversal::CopyJob;
 use std::{fs, io};
 use std::path::Path;
 
+// Min number of bytes for it to be deemed worthwhile comparing the contents of a file in src and dest
+const MIN_BYTES_FOR_SYNC: u64 = 1024;
+
 
 pub fn sync(job: CopyJob) -> io::Result<u64> {
     if job.may_exist {
-        todo!()
+        merge(job)
     } else {
         copy(job)
+    }
+}
+
+fn merge(job: CopyJob) -> io::Result<u64> {
+    let dest_meta = match job.dest.symlink_metadata() {
+        Ok(x) => x,
+        // assume that dest doesn't exist - if false then we're just kicking the error can down the road
+        Err(_) => return copy(job),
+    };
+    if dest_meta.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("Found directory with conflicting name: {}", job.dest.display())))
+    };
+    // dest is either a symlink or a file
+    if dest_meta.len() < MIN_BYTES_FOR_SYNC {
+        fs::remove_file(&job.dest)?;
+        copy(job)
+    } else {
+        todo!()
     }
 }
 
