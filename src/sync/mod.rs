@@ -10,13 +10,20 @@ const MIN_BYTES_FOR_SYNC: u64 = 1024;
 
 pub fn sync(job: CopyJob) -> io::Result<u64> {
     if job.may_exist {
-        merge(job)
+        merge_unchecked(job)
     } else {
         copy(job)
     }
 }
 
-fn merge(job: CopyJob) -> io::Result<u64> {
+
+// Entrypoint for a merge job. Calls copy if:
+// 1. dest doesn't exist
+// 1. dest is smaller than MIN_BYTES_FOR_SYNC (deletes dest first)
+//. # Errors
+// 1. If dest exists and is a dir
+// 1. If the metadata of dest could not be retrieved
+fn merge_unchecked(job: CopyJob) -> io::Result<u64> {
     let dest_meta = match job.dest.symlink_metadata() {
         Ok(x) => x,
         // assume that dest doesn't exist - if false then we're just kicking the error can down the road
@@ -30,7 +37,7 @@ fn merge(job: CopyJob) -> io::Result<u64> {
         fs::remove_file(&job.dest)?;
         copy(job)
     } else {
-        todo!()
+        merge_checked(&job.src, &job.dest)
     }
 }
 
@@ -38,6 +45,7 @@ fn merge(job: CopyJob) -> io::Result<u64> {
 // # Errors
 // 1. If the copy failed
 // 1. If the file is a symlink and dest already exists
+// 1. If dest exists and is a directory
 fn copy(job: CopyJob) -> io::Result<u64> {
     if job.symlink {
         copy_symlink(&job.src, &job.dest).and(Ok(0))
@@ -57,4 +65,14 @@ fn copy(job: CopyJob) -> io::Result<u64> {
 fn copy_symlink(src: &Path, dest: &Path) -> io::Result<()> {
     let target = fs::read_link(src)?;
     std::os::unix::fs::symlink(target, dest)
+}
+
+
+// ********* rsync style logic *********
+
+// Handles a merge of src into dest. Assumes:
+// 1. src and dest exist
+// 1. src and dest are files (not symlinks)
+fn merge_checked(src: &Path, dest: &Path) -> io::Result<u64> {
+    todo!()
 }
