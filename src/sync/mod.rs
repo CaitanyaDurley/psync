@@ -4,6 +4,7 @@ pub use directory_traversal::CopyJob;
 use std::{fs, io};
 use std::io::Read;
 use std::path::Path;
+use std::collections::HashMap;
 
 // Min number of bytes for it to be deemed worthwhile comparing the contents of a file in src and dest
 const MIN_BYTES_FOR_SYNC: u64 = 1024;
@@ -77,12 +78,19 @@ fn copy_symlink(src: &Path, dest: &Path) -> io::Result<()> {
 // 1. src and dest exist
 // 1. src and dest are files (not symlinks)
 fn merge_checked(src: &Path, dest: &Path) -> io::Result<u64> {
+    let dest_block_lookup = build_dest_block_lookup(dest)?;
+    Ok(0)
+}
+
+fn build_dest_block_lookup(dest: &Path) -> io::Result<HashMap<[u8; BLOCK_SIZE], usize>> {
     let mut dest_file = fs::File::open(dest)?;
     let mut buf = [0; BLOCK_SIZE];
-    let mut i = 0;
-    let mut last_read = 1;
+    let mut byte_counter = 0;
+    let mut block_counter: usize = 0;
+    let mut possible_eof = false;
+    let mut block_lookup = HashMap::new();
     loop {
-        let res = dest_file.read(&mut buf[i..]);
+        let res = dest_file.read(&mut buf[byte_counter..]);
         if let Err(e) = res {
             match e.kind() {
                 io::ErrorKind::Interrupted => continue,
@@ -90,15 +98,20 @@ fn merge_checked(src: &Path, dest: &Path) -> io::Result<u64> {
             }
         };
         let res = res.unwrap();
-        i += res;
-        if i == BLOCK_SIZE {
-            todo!();
-            i = 0;
-        } else if res == 0 && last_read == 0 {
-            // two successive Ok(0) => EOF
-            break
+        byte_counter += res;
+        if byte_counter == BLOCK_SIZE {
+            block_lookup.insert(buf, block_counter);
+            byte_counter = 0;
+            block_counter += 1;
+        } else if res == 0 {
+            if possible_eof {
+                // two successive Ok(0) => EOF
+                break
+            }
+            possible_eof = true;
+        } else {
+            possible_eof = false;
         }
-        last_read = res;
     }
-    Ok(0)
+    Ok(block_lookup)
 }
