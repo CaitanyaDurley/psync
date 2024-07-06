@@ -6,10 +6,10 @@ use std::io::Read;
 use std::path::Path;
 use std::collections::HashMap;
 
-// Min number of bytes for it to be deemed worthwhile comparing the contents of a file in src and dest
-const MIN_BYTES_FOR_SYNC: u64 = 1024;
 // Block size in bytes to compare src and dest
 const BLOCK_SIZE: usize = 1024;
+// Min number of bytes for it to be deemed worthwhile comparing the contents of a file in src and dest
+const MIN_BYTES_FOR_SYNC: usize = 10 * BLOCK_SIZE;
 
 
 pub fn sync(job: CopyJob) -> io::Result<u64> {
@@ -37,7 +37,7 @@ fn merge_unchecked(job: CopyJob) -> io::Result<u64> {
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("Found directory with conflicting name: {}", job.dest.display())))
     };
     // dest is either a symlink or a file
-    if dest_meta.len() < MIN_BYTES_FOR_SYNC {
+    if dest_meta.len() < MIN_BYTES_FOR_SYNC as u64 {
         fs::remove_file(&job.dest)?;
         copy(job)
     } else {
