@@ -2,10 +2,13 @@ pub mod directory_traversal;
 
 pub use directory_traversal::CopyJob;
 use std::{fs, io};
+use std::io::Read;
 use std::path::Path;
 
 // Min number of bytes for it to be deemed worthwhile comparing the contents of a file in src and dest
 const MIN_BYTES_FOR_SYNC: u64 = 1024;
+// Block size in bytes to compare src and dest
+const BLOCK_SIZE: usize = 1024;
 
 
 pub fn sync(job: CopyJob) -> io::Result<u64> {
@@ -74,5 +77,28 @@ fn copy_symlink(src: &Path, dest: &Path) -> io::Result<()> {
 // 1. src and dest exist
 // 1. src and dest are files (not symlinks)
 fn merge_checked(src: &Path, dest: &Path) -> io::Result<u64> {
-    todo!()
+    let mut dest_file = fs::File::open(dest)?;
+    let mut buf = [0; BLOCK_SIZE];
+    let mut i = 0;
+    let mut last_read = 1;
+    loop {
+        let res = dest_file.read(&mut buf[i..]);
+        if let Err(e) = res {
+            match e.kind() {
+                io::ErrorKind::Interrupted => continue,
+                _ => return Err(e)
+            }
+        };
+        let res = res.unwrap();
+        i += res;
+        if i == BLOCK_SIZE {
+            todo!();
+            i = 0;
+        } else if res == 0 && last_read == 0 {
+            // two successive Ok(0) => EOF
+            break
+        }
+        last_read = res;
+    }
+    Ok(0)
 }
