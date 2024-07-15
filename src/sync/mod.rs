@@ -98,19 +98,16 @@ fn build_dest_block_lookup(dest: &Path) -> io::Result<HashMap<[u8; BLOCK_SIZE], 
             }
         };
         let res = res.unwrap();
+        if possible_eof && res == 0 {
+            // two successive Ok(0) => EOF
+            break
+        }
+        possible_eof = res == 0;
         byte_counter += res;
         if byte_counter == BLOCK_SIZE {
             block_lookup.insert(buf, block_counter);
             byte_counter = 0;
             block_counter += 1;
-        } else if res == 0 {
-            if possible_eof {
-                // two successive Ok(0) => EOF
-                break
-            }
-            possible_eof = true;
-        } else {
-            possible_eof = false;
         }
     }
     Ok(block_lookup)
