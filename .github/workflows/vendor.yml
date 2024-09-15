@@ -25,4 +25,5 @@ jobs:
                 name: vendor
                 path: .
                 if-no-files-found: error
+                include-hidden-files: true
             - run: echo 'Artifact ID is ${{ steps.artifact-upload-step.outputs.artifact-id }}'
